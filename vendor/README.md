@@ -35,12 +35,9 @@ shasum -a 256 dsh-tiktok-ops/vendor/guben.mjs   # 更新下面表格里的 sha25
 `npm run test:host` 里有一条断言会比对内联副本与同级源文件（同级不存在时自动跳过），
 所以在这个 workspace 里改了源文件却忘了同步，测试会直接报出来。
 
-### 关于授权（当前决定：不公开发布）
+### 授权
 
-`guben-material` 目前**没有 LICENSE 文件**。
+`guben.mjs` 是自有代码，版权归本项目所有，随仓库根目录的 `LICENSE`（MIT）一起分发。
 
-本插件**不打算发布到公开 npm**——`package.json` 里 `private: true` 保留着，`npm publish` 会被直接拒绝，
-所以现在不存在对外再分发的授权问题。
-
-只有将来改成公开 / 半公开分发时，才需要先明确这份 CLI 的授权归属：
-自有代码就补个许可证，是第三方就要看对方条款。**改 `private` 之前先把这件事办掉。**
+> `guben-material/` 源目录本身仍然没有 LICENSE 文件。如果以后要单独分发那个 skill，
+> 记得也给它补一份。本仓库只内联了 `guben.mjs` 这一个文件。

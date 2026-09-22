@@ -248,26 +248,20 @@ DSH 任务看板的 cron 没有对外暴露成服务，它的定时是驱动自�
 
 ## 安装
 
-### 方式一：团队成员从私有 GitHub 仓库装（推荐）
+### 方式一：从 GitHub 仓库装（推荐）
 
-> **仓库**：https://github.com/wifiyang88-ux/dsh-tiktok-ops （Private）
+> **仓库**：https://github.com/wifiyang88-ux/dsh-tiktok-ops （Public）
+>
+> 公开仓库，**谁拿到链接都能装**——不需要邀请协作者，也不需要配 SSH key 或登录。
 
-**第 0 步：先给队友开门。** 这是私有仓库，没被加进来的人连 clone 都会 404。
-仓库 → Settings → Collaborators → Add people，把队友的 GitHub 账号加进去。
-
-**第 1 步：每人各自准备环境**——Node ≥ 22.19、`pnpm`、`dsh`，
-并让 git 能访问私有仓库（配好 SSH key，或用 `gh auth login` 走 HTTPS）。
+**第 1 步：准备环境**——Node ≥ 22.19、`pnpm`、`dsh`。
 
 ```sh
-# SSH（私有仓库推荐）
-dsh plugin --profile web add git+ssh://git@github.com/wifiyang88-ux/dsh-tiktok-ops.git#main
-
-# 或者 github: 简写；或者如果你装了 gh，HTTPS 也能直接认证
-dsh plugin --profile web add github:wifiyang88-ux/dsh-tiktok-ops#main
+dsh plugin --profile web add git+https://github.com/wifiyang88-ux/dsh-tiktok-ops.git#main
 ```
 
 > 想钉死版本便于复现，把 `#main` 换成具体提交：在仓库里跑 `git rev-parse HEAD`。
-> 不钉的话就用 `#main`，以后想升级重新跑一次 `add`（或 `dsh plugin update`）。
+> 不钉就用 `#main`，以后升级重新跑一次 `add`（或 `dsh plugin update`）。
 
 **第 2 步：重启一次 dsh**——新加入的 bundle 不会应用到正在运行的进程：
 
@@ -285,7 +279,7 @@ dsh plugin --profile web list --depth 0
 **第 4 步：每人填自己的凭据**（这些是**本机状态**，不在仓库里，互不影响）：
 
 1. GUI →「设置 → TikTok 运营助手」
-2. 填 **TikTok 账号**（各自的号）、**顾本素材库 API Token**、**MiniMax H3 API Token**（可选）
+2. 填 **TikTok 账号**（各自的号）、**顾本素材库地址**、**顾本素材库 API Token**、**MiniMax H3 API Token**（可选）
 3. 点「登录」完成一次 TikTok 登录
 
 **不需要**另外安装 `guben-material` —— 顾本 CLI 已内联在 `vendor/guben.mjs`。
