@@ -1,0 +1,49 @@
+{
+  "name": "dsh-tiktok-ops",
+  "version": "0.2.0",
+  "private": true,
+  "description": "TikTok 运营助手：用户提交选题任务 → agent 写提示词并生成视频 → 脚本审核与审片 → 发布 → 定时回采数据与评论 → 用数据反哺下一轮选题。",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "engines": {
+      "dsh": ">=0.1.5-rc.1"
+    },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [],
+      "platform": "web"
+    }
+  },
+  "dependencies": {
+    "agent-browser": "^0.27.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-tools": ">=0.1.5-rc.1"
+  },
+  "scripts": {
+    "test": "node scripts/test-harness.mjs && node scripts/test-client.mjs",
+    "test:host": "node scripts/test-harness.mjs",
+    "test:client": "node scripts/test-client.mjs",
+    "test:parser": "node scripts/test-metrics-parser.mjs",
+    "test:drivers": "node scripts/test-drivers.mjs",
+    "test:diagnostics": "node scripts/test-diagnostics.mjs",
+    "verify": "node scripts/verify-install.mjs",
+    "smoke:minimax": "node scripts/smoke-minimax.mjs",
+    "install:plugin": "sh scripts/install.sh web",
+    "uninstall:plugin": "sh scripts/install.sh web --uninstall"
+  },
+  "files": [
+    "lib",
+    "vendor",
+    "cordis.patch.yml"
+  ],
+  "license": "MIT"
+}

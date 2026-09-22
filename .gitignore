@@ -1,0 +1,27 @@
+# 依赖与构建产物：由 pnpm/npm 安装，不进仓库
+node_modules/
+.pnpm-store/
+
+# 测试与冒烟产物（跑测试时会临时生成，跑完自己删）
+.harness-home/
+.smoke-outputs/
+
+# 打包产物
+*.tgz
+*.tar.gz
+
+# 本地凭据 —— 绝不入库
+# （插件自己的凭据在 $DSH_HOME，不在仓库里；这几条是防手滑）
+config.json
+.guben/
+.env
+.env.*
+*.key
+*.pem
+
+# 操作系统 / 编辑器
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/

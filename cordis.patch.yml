@@ -1,0 +1,8 @@
+# dsh-tiktok-ops bundle patch: inserts the dual-face plugin row into the web
+# profile roster. The node half owns the task board (six-state workflow),
+# the model-facing tools, and the two external drivers (Guben / agent-browser).
+# The `dsh.client` declaration in package.json makes the browser half
+# (exports "./client") load in the web GUI as the 「TikTok 运营助手」 section.
+- insert:
+    - id: tiktok-ops
+      name: 'dsh-tiktok-ops'
