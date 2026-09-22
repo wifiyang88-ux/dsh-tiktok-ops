@@ -250,31 +250,39 @@ DSH 任务看板的 cron 没有对外暴露成服务，它的定时是驱动自�
 
 ### 方式一：团队成员从私有 GitHub 仓库装（推荐）
 
-**前提**（每人各自准备一次）：Node ≥ 22.19、`pnpm`、`dsh`，并让 git 能访问私有仓库
-（配好 SSH key，或 credential helper）。
+> **仓库**：https://github.com/wifiyang88-ux/dsh-tiktok-ops （Private）
+
+**第 0 步：先给队友开门。** 这是私有仓库，没被加进来的人连 clone 都会 404。
+仓库 → Settings → Collaborators → Add people，把队友的 GitHub 账号加进去。
+
+**第 1 步：每人各自准备环境**——Node ≥ 22.19、`pnpm`、`dsh`，
+并让 git 能访问私有仓库（配好 SSH key，或用 `gh auth login` 走 HTTPS）。
 
 ```sh
-# SSH（私有仓库推荐）。<sha> 换成仓库里的具体提交，便于复现
-dsh plugin --profile web add git+ssh://git@github.com/<组织>/<仓库名>.git#<sha>
+# SSH（私有仓库推荐）
+dsh plugin --profile web add git+ssh://git@github.com/wifiyang88-ux/dsh-tiktok-ops.git#main
 
-# 或者 github: 简写（同样要求 git 已能认证）
-dsh plugin --profile web add github:<组织>/<仓库名>#<sha>
+# 或者 github: 简写；或者如果你装了 gh，HTTPS 也能直接认证
+dsh plugin --profile web add github:wifiyang88-ux/dsh-tiktok-ops#main
 ```
 
-装完**重启一次 dsh**——新加入的 bundle 不会应用到正在运行的进程：
+> 想钉死版本便于复现，把 `#main` 换成具体提交：在仓库里跑 `git rev-parse HEAD`。
+> 不钉的话就用 `#main`，以后想升级重新跑一次 `add`（或 `dsh plugin update`）。
+
+**第 2 步：重启一次 dsh**——新加入的 bundle 不会应用到正在运行的进程：
 
 ```sh
 dsh --profile web        # 或 dsh web
 ```
 
-验证真的装上了（别跳过：`add` 成功只代表 pnpm 解析成功，不代表 profile 会加载它）：
+**第 3 步：验证真的装上了**（别跳过——`add` 成功只代表 pnpm 解析成功，不代表 profile 会加载它）：
 
 ```sh
 dsh plugin --profile web list --depth 0
 # dsh-tiktok-ops 应当出现，并带一个已解析的版本
 ```
 
-**每位成员各自要做的**（这些是**本机状态**，不在仓库里，互不影响）：
+**第 4 步：每人填自己的凭据**（这些是**本机状态**，不在仓库里，互不影响）：
 
 1. GUI →「设置 → TikTok 运营助手」
 2. 填 **TikTok 账号**（各自的号）、**顾本素材库 API Token**、**MiniMax H3 API Token**（可选）
