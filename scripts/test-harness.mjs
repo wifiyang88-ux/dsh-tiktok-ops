@@ -19,11 +19,18 @@ const tools = [];
 const logs = [];
 const promptSections = [];
 
-const ctx = {
-  logger: {
-    info: (m) => logs.push(`info: ${m}`),
-    warn: (m) => logs.push(`warn: ${m}`),
-  },
+/**
+ * 服务容器 + ctx 契约。
+ *
+ * cordis 4.x 对「没声明 inject 就访问服务」是**直接抛错**（`cannot get property "x" without inject`），
+ * 不是返回 undefined。以前这里的 ctx 是个普通对象，任何属性都能拿到，于是一个真实存在的 bug
+ * 在几百项离线测试里完全隐形：`lib/index.js` 的 inject 里没有 `'tools'`，
+ * 而 `registerTools()` 直接访问 `ctx.tools` → 11 个模型工具全部注册失败、还被逐条 try/catch 吞掉，
+ * 最后照样打印「已注册 11 个模型工具」。
+ *
+ * 所以这里把契约补上：服务要**先声明**（静态 inject 或 ctx.inject）才拿得到，否则抛错。
+ */
+const services = {
   webServer: {
     register(route) {
       // 与真实 dsh-host-webserver 一致：重复 (kind, path) 直接抛错，
@@ -33,32 +40,60 @@ const ctx = {
       return () => routes.delete(route.path);
     },
   },
-  tools: {
-    register(tool) {
-      tools.push(tool);
-    },
-  },
   systemPrompt: {
     section(options) {
       promptSections.push(options);
       return () => {};
     },
   },
-  // 模拟 cordis 的 ctx.inject：目标服务已在就直接调用回调
-  inject(names, callback) {
-    if (names.includes('systemPrompt')) callback({ systemPrompt: ctx.systemPrompt });
+  tools: {
+    register(tool) {
+      tools.push(tool);
+    },
   },
-  effect(fn) {
-    fn();
-    return () => {};
-  },
-  get(name) {
-    if (name === 'clientModules') {
-      return { graph: () => ({ rev: 'test', entries: [], batches: [] }), clientPath: () => undefined };
-    }
-    return undefined;
-  },
+  // typertGateway / workspaceRegistry 故意**不提供**：正好用来验证「网关不可用」的失败路径
 };
+
+// 静态注入表直接读 lib/index.js，保证测试台和真实入口用的是同一份声明
+const indexModule = await import('../lib/index.js');
+const declared = new Set(Array.isArray(indexModule.inject) ? indexModule.inject : []);
+
+/** ctx 自身的成员（不是可注入的服务），任何时候都能访问。 */
+const CTX_BUILTINS = new Set(['inject', 'effect', 'get', 'logger']);
+
+const ctx = new Proxy(
+  {},
+  {
+    get(_target, prop) {
+      if (typeof prop === 'symbol') return undefined;
+      const name = String(prop);
+      if (name === 'logger') {
+        return { info: (m) => logs.push(`info: ${m}`), warn: (m) => logs.push(`warn: ${m}`) };
+      }
+      if (name === 'inject') {
+        return (names, callback) => {
+          for (const n of names) declared.add(n);
+          // 模拟 cordis：服务都在才回调（服务缺失时就静默跳过这段）
+          if (names.every((n) => services[n] !== undefined)) callback(ctx);
+        };
+      }
+      if (name === 'effect') return (fn) => { fn(); return () => {}; };
+      if (name === 'get') {
+        return (n) =>
+          n === 'clientModules'
+            ? { graph: () => ({ rev: 'test', entries: [], batches: [] }), clientPath: () => undefined }
+            : undefined;
+      }
+      if (services[name] !== undefined) {
+        // 这就是那个 bug 的复现点：没声明 inject 就访问 → 抛错
+        if (!declared.has(name)) throw new Error(`cannot get property "${name}" without inject`);
+        return services[name];
+      }
+      if (CTX_BUILTINS.has(name)) return undefined;
+      return undefined;
+    },
+  }
+);
 
 const impl = await import('../lib/impl.js');
 const { buildInsights, STATUS } = impl.internals;
@@ -160,6 +195,13 @@ check('注册了 /material/upload', routes.has('/api/tiktok-ops/material/upload'
 check('注册了 /collect', routes.has('/api/tiktok-ops/collect'));
 check('注册了 /insights', routes.has('/api/tiktok-ops/insights'));
 check(`注册了模型工具（${tools.length} 个）`, tools.length === 11, tools.map((t) => t?.name));
+
+// 工具「静默消失」是一类很容易复发的 bug：cordis 对没声明 inject 的服务直接抛错，
+// 而逐条 try/catch 会把 11 个失败全吞掉、最后还打印「已注册 11 个」。
+// 所以这里不只数个数，还盯日志里有没有失败记录、以及那条汇总有没有说实话。
+check('没有任何模型工具注册失败', !logs.some((l) => /个模型工具注册失败/.test(l)), logs.filter((l) => /工具/.test(l)));
+check('注册汇总如实报告 11/11', logs.some((l) => /已注册 11\/11 个模型工具/.test(l)), logs.filter((l) => /模型工具/.test(l)));
+check('tools 已声明进 inject（否则根本访问不到）', Array.isArray(indexModule.inject) && indexModule.inject.includes('tools'), indexModule.inject);
 
 console.log('\n[设置：只留账号与顾本 Token]');
 const saved = await call('/account/save', { body: { account: { label: '运营号', username: 'ops_demo', password: 'pw' } } });
@@ -398,10 +440,25 @@ check('人工重置后冷却解除', !(Number(resetAcc.loginBlockedUntil ?? 0) >
 console.log('\n[注入给 agent 的使用说明]');
 check('注册了 systemPrompt 说明段', promptSections.length === 1, promptSections.map((x) => x.name));
 const guidance = String(promptSections[0]?.text ?? '');
-check('说明里点名了官方 sd25-pe skill', /sd25-pe/.test(guidance), guidance.slice(0, 80));
-check('说明里要求先加载 skill 再写提示词', /先加载/.test(guidance) && /提示词/.test(guidance), 'ok');
+// 关键：测试环境里没有 skills 服务 → 探不到 sd25-pe → 就**不能**提它。
+// 以前那句是无条件写死的，于是 agent 被要求「先加载一个不存在的东西」，
+// 「不要凭感觉写一句话就提交」这条约束也跟着落空。
+check('探测不到 sd25-pe 时绝不点名它', !/sd25-pe/.test(guidance), guidance.slice(0, 90));
+const { buildPromptGuidance, detectSkill } = impl.internals;
+check('没有 skills 服务时探测返回 false', (await detectSkill(ctx, 'sd25-pe')) === false);
+const withSkill = buildPromptGuidance(true);
+check('确实装了才要求先加载它', /先加载/.test(withSkill) && /sd25-pe/.test(withSkill), withSkill.slice(0, 120));
+// 不管哪一版，硬要求都必须在——否则「不凭感觉写」的约束就没了
+for (const [label, text] of [['无 skill 版', guidance], ['有 skill 版', withSkill]]) {
+  check(`${label}：仍要求写清语言`, /英语/.test(text), text.slice(0, 80));
+  check(`${label}：仍禁止把画幅/时长写进提示词`, /画幅比例/.test(text) && /总时长/.test(text));
+  check(`${label}：仍要求结构化模板`, /结构化/.test(text) && /事件脚本/.test(text));
+  check(`${label}：仍保留「不要凭感觉」的约束`, /凭感觉/.test(text));
+}
 check('说明里默认欧美市场 + 英语', /欧美/.test(guidance) && /英语/.test(guidance), 'ok');
 check('说明里禁止把画幅/时长写进提示词', /画幅比例/.test(guidance) && /总时长/.test(guidance), 'ok');
+const diagGuidance = await call('/diag', { method: 'GET' });
+check('/diag 报告 sd25-pe 探测结果', diagGuidance.json?.guidance?.sd25Pe === false, diagGuidance.json?.guidance);
 
 const { MARKET } = impl.internals;
 check('市场选项含欧美/国内/其它', Object.keys(MARKET).join(',') === 'us-eu,cn,other', Object.keys(MARKET));

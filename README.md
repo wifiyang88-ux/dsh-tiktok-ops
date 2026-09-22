@@ -254,7 +254,15 @@ DSH 任务看板的 cron 没有对外暴露成服务，它的定时是驱动自�
 >
 > 公开仓库，**谁拿到链接都能装**——不需要邀请协作者，也不需要配 SSH key 或登录。
 
-**第 1 步：准备环境**——Node ≥ 22.19、`pnpm`、`dsh`。
+> ⚠️ **版本要求：dsh ≥ 0.1.5-rc.1**
+>
+> 左侧导航那一行注册在核心座位 `sidebar.panellist` 上，而这个座位是
+> `@deepseek-ai/dsh-client-ui-sidebar@0.1.5-rc.1` 才引入的。更旧的版本（例如 **0.1.1-rc.2**）
+> 里侧栏只有 `brand.mark / brand.name / footer.action / settings / workspaces`，**没有任何可加导航行的座位**——
+> 于是插件装上了、面板也有，但左侧导航**静默地什么都不显示**（`ctx.slots.inject` 的座位不存在时，
+> 回调根本不会触发）。用 `dsh --version` 确认。
+
+**第 1 步：准备环境**——Node ≥ 22.19、`pnpm`、**dsh ≥ 0.1.5-rc.1**。
 
 ```sh
 dsh plugin --profile web add git+https://github.com/wifiyang88-ux/dsh-tiktok-ops.git#main
@@ -446,6 +454,8 @@ MiniMax H3 生成的是**带音轨**的视频（`t2va` = text→video **+ audio*
 - **「分享次数」在创作中心默认不显示**。内容页要手动开启分享列，否则该项恒为 0——
   洞察里会显式提示 `sharesAvailable=false`，避免把「没数据」误读成「没人分享」。
 - 发布走网页上传，不是官方 API。需要稳定请改用官方 Content Posting API（要过应用审核）。
+- **dsh 需要 ≥ 0.1.5-rc.1**：左侧导航座位 `sidebar.panellist` 从该版本才有，更旧的版本上导航会静默不显示。
+  而 package.json 里的 `dsh.engines.dsh` 字段**没有任何代码读它**，只是文档，不会拦住你——所以只能靠这里说明。
 - **「下一条拍什么」不在插件里自动下结论**：插件只做确定性统计，推理交给 agent
   （它能看到完整的选题与提示词上下文）。
 - **MiniMax 那条路不支持首尾帧**。参考素材统一按 `reference_image` / `reference_video` 传，
@@ -458,7 +468,7 @@ MiniMax H3 生成的是**带音轨**的视频（`t2va` = text→video **+ audio*
 
 ```sh
 npm run verify           # 安装 + 运行时一键验证（14 项）
-npm test                 # 离线：宿主 241 项 + 客户端 98 项
+npm test                 # 离线：宿主 257 项 + 客户端 98 项
 npm run test:host        # 只跑宿主：路由 + 六态流转 + 审核 + 提示词改写 + 素材选择器 + 洞察 + MiniMax 驱动
 npm run test:client      # 只跑客户端：自带最小 React，把 client.js 真渲染一遍并断言发出的请求
 npm run test:parser      # 创作中心列表解析，含分享列（33 项，fixtures 是真实抓取的页面文本）
