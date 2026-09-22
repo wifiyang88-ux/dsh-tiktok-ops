@@ -41,3 +41,50 @@ shasum -a 256 dsh-tiktok-ops/vendor/guben.mjs   # 更新下面表格里的 sha25
 
 > `guben-material/` 源目录本身仍然没有 LICENSE 文件。如果以后要单独分发那个 skill，
 > 记得也给它补一份。本仓库只内联了 `guben.mjs` 这一个文件。
+
+---
+
+## sd25-pe/SKILL.md —— ⚠️ 第三方内容，授权未明确
+
+| | |
+|---|---|
+| 来源 | 火山方舟官方 skill，`https://arkdocs.tos-cn-beijing.volces.com/skills/` |
+| 安装方式（官方给） | `npx --yes skills@latest add "https://arkdocs.tos-cn-beijing.volces.com/skills/" --skill sd25-pe --yes` |
+| frontmatter | `name: sd25-pe`、`skill_version: 0.1.1`、**`owner: seedance`** |
+| 体积 | 69,727 字节（约 26,629 字符，996 行） |
+| sha256 | `ee04557ba9a1c9f5517b574e24fc73d0022b22254373074db4c11f3d0635ea57` |
+| 内联日期 | 2026-09-22 |
+
+### 为什么内联
+
+`sd25-pe` 原本是 **workspace 级** skill（`.agents/skills/sd25-pe/`）。开发机上有，
+但从 git 装进来的插件在别人机器上根本没有它 —— 于是注入给 agent 的说明会要求
+「先加载 sd25-pe」，而那个东西并不存在：agent 要么卡住、要么跳过，
+「不要凭感觉写一句话就提交」这条约束也跟着落空。
+
+内联之后由 `registerVendoredSkill()` 通过 `ctx.skills.register()` 注册为**运行时 skill**。
+选它而不是塞进系统提示，是因为 skill 是**渐进披露**的：提示里只出现名字与描述，
+26 K 字符的正文按需加载，不会撑爆上下文。
+
+### ⚠️ 授权状态：未经授权再分发
+
+**这份文件不是本项目的代码，全文没有任何 license 或 copyright 声明。**
+`owner: seedance` 表明它属于火山方舟（字节跳动）的 Seedance 团队。
+
+本仓库是**公开**仓库，因此内联它等于向公众再分发第三方内容。经项目所有者确认
+**接受这一风险**后保留在此；法律上「没有 license」默认是保留所有权利，
+所以：
+
+- 对外分发本仓库前，或收到任何权利方异议时，**优先移除 `vendor/sd25-pe/` 并改用
+  `docs/TEAM-INSTALL.md` 里记录的官方安装命令**（那才是官方分发渠道）。
+- 移除后功能不会崩：`registerVendoredSkill()` 会因为文件不存在而跳过，
+  说明文本会自动退回「不点名 sd25-pe」的自包含版本（`buildPromptGuidance(false)`），
+  硬要求仍然全部保留。
+
+### 怎么更新
+
+```sh
+npx --yes skills@latest add "https://arkdocs.tos-cn-beijing.volces.com/skills/" --skill sd25-pe --yes
+cp .agents/skills/sd25-pe/SKILL.md dsh-tiktok-ops/vendor/sd25-pe/SKILL.md
+shasum -a 256 dsh-tiktok-ops/vendor/sd25-pe/SKILL.md   # 更新上面表格里的 sha256
+```

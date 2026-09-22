@@ -155,26 +155,40 @@
 - 「已下载」在服务端没有过滤参数，是插件拉一大页到本地再筛的（公共库目前是几百条量级）。
 - 顾本一次只能用一种 scope，两种混着选时优先「我的作品」，被让位的那批会写进详情里的「素材处理」。
 
-## 提示词质量：接入了火山方舟官方 skill
+## 提示词质量：内联了火山方舟官方 skill
 
-生成的视频提示词不再是一句话，而是按**官方 Seedance 2.5 提示词规范**产出的结构化提示词。
-做这件事的是火山方舟官方的 `sd25-pe` skill，安装命令（官方给的）：
+生成的视频提示词不是一句话，而是按**官方 Seedance 2.5 提示词规范**产出的结构化提示词。
+做这件事的是火山方舟官方的 `sd25-pe` skill——**插件已经把它内联进来了，用户不用自己装**：
 
-```sh
-npx --yes skills@latest add "https://arkdocs.tos-cn-beijing.volces.com/skills/" --skill sd25-pe --yes
+```
+vendor/sd25-pe/SKILL.md   （69.7 KB，996 行）
 ```
 
-> 本机 npm 缓存目录有 root 属主文件会报 EPERM，加一个独立缓存目录绕开：
-> `npm_config_cache=/tmp/npm-cache npx --yes skills@latest add ...`
+挂载时由 `registerVendoredSkill()` 通过 `ctx.skills.register()` 注册成**运行时 skill**。
+选它而不是把正文塞进系统提示，是因为 skill 是**渐进披露**的：系统提示里只出现名字与描述，
+正文按需加载，不会撑爆上下文。
 
-装好后 DSH 会自动把它纳入技能目录。插件同时会往 agent 的系统提示里注入一段使用说明
-（写提示词前必须先加载 `sd25-pe`，不要凭感觉写；不要把画幅/时长/分辨率写进提示词）。
-
-用 `/api/tiktok-ops/diag` 的 `guidance` 字段可以确认注入是否成功：
+于是说明里那条「写提示词前必须先加载 `sd25-pe`」**是有保障的**，不再是「要求加载一个不存在的东西」。
+用 `/diag` 确认：
 
 ```json
-{"registered": true, "reason": "ok", "mentionsSkill": true}
+{"registered": true, "reason": "ok", "vendoredSkill": true, "sd25Pe": true, "mentionsSkill": true}
 ```
+
+万一内联的 skill 缺失、或 skills 服务不可用，说明会**自动退回自包含版本**，不再点名 sd25-pe，
+但四条硬要求（写清语言 / 禁止把画幅时长写进提示词 / 要结构化模板 / 别凭感觉写一句话）**永远保留**。
+
+> ⚠️ **授权提醒**：`sd25-pe` 是火山方舟（字节）的官方内容，**全文没有 license 声明**
+> （frontmatter 里 `owner: seedance`）。本仓库公开，内联它等于再分发第三方内容——
+> 这是经项目所有者确认后接受的风险。**收到任何权利方异议、或要正式对外分发时，
+> 请删掉 `vendor/sd25-pe/`**：功能不会崩，说明会自动退回自包含版本。
+> 官方安装渠道：
+>
+> ```sh
+> npx --yes skills@latest add "https://arkdocs.tos-cn-beijing.volces.com/skills/" --skill sd25-pe --yes
+> ```
+>
+> 详见 `vendor/README.md`。
 
 ### 市场与语言默认
 
@@ -468,7 +482,7 @@ MiniMax H3 生成的是**带音轨**的视频（`t2va` = text→video **+ audio*
 
 ```sh
 npm run verify           # 安装 + 运行时一键验证（14 项）
-npm test                 # 离线：宿主 257 项 + 客户端 98 项
+npm test                 # 离线：宿主 265 项 + 客户端 98 项
 npm run test:host        # 只跑宿主：路由 + 六态流转 + 审核 + 提示词改写 + 素材选择器 + 洞察 + MiniMax 驱动
 npm run test:client      # 只跑客户端：自带最小 React，把 client.js 真渲染一遍并断言发出的请求
 npm run test:parser      # 创作中心列表解析，含分享列（33 项，fixtures 是真实抓取的页面文本）
@@ -502,6 +516,7 @@ lib/index.js         宿主薄壳（热加载用）
 lib/impl.js          宿主实现：任务模型/流转/路由/工具/驱动/洞察
 lib/minimax.js       MiniMax H3 视频生成驱动（建任务/轮询/下载，可注入 fetch 测试）
 vendor/guben.mjs     内联的顾本 CLI（零依赖，用户不用另装 guben-material）
+vendor/sd25-pe/      内联的火山方舟官方提示词优化 skill（注册成运行时 skill）
 lib/client.js        客户端落地页（含素材选择器）
 scripts/test-harness.mjs  宿主离线测试
 scripts/test-client.mjs   客户端离线冒烟测试（自带最小 React）

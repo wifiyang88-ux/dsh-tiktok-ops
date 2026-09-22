@@ -18,6 +18,7 @@ const routes = new Map();
 const tools = [];
 const logs = [];
 const promptSections = [];
+const skills = [];
 
 /**
  * 服务容器 + ctx 契约。
@@ -51,6 +52,23 @@ const services = {
       tools.push(tool);
     },
   },
+  // 运行时 skill 注册：对齐 @deepseek-ai/dsh-skill 的 SkillRegistry
+  // （register(reg) 返回 disposer；list() 是异步的，返回摘要列表）
+  skills: {
+    register(skill) {
+      skills.push(skill);
+      return () => {};
+    },
+    async list() {
+      return skills.map((s) => ({
+        name: s.name,
+        description: s.description,
+        source: s.source ?? 'runtime',
+        provider: 'runtime',
+        invocation: { modelInvocable: true, userInvocable: true },
+      }));
+    },
+  },
   // typertGateway / workspaceRegistry 故意**不提供**：正好用来验证「网关不可用」的失败路径
 };
 
@@ -79,10 +97,13 @@ const ctx = new Proxy(
       }
       if (name === 'effect') return (fn) => { fn(); return () => {}; };
       if (name === 'get') {
-        return (n) =>
-          n === 'clientModules'
-            ? { graph: () => ({ rev: 'test', entries: [], batches: [] }), clientPath: () => undefined }
-            : undefined;
+        return (n) => {
+          if (n === 'clientModules') {
+            return { graph: () => ({ rev: 'test', entries: [], batches: [] }), clientPath: () => undefined };
+          }
+          // ctx.get 是「偷看」入口：cordis 里它不需要声明 inject 就能拿到服务
+          return services[n];
+        };
       }
       if (services[name] !== undefined) {
         // 这就是那个 bug 的复现点：没声明 inject 就访问 → 抛错
@@ -437,28 +458,42 @@ const resetAcc = reset.json.state.accounts.find((a) => a.id === accId);
 check('人工重置后冷却解除', !(Number(resetAcc.loginBlockedUntil ?? 0) > Date.now()), resetAcc.loginBlockedUntil);
 
 
+console.log('\n[内联 sd25-pe skill：装插件就等于装上它]');
+// 这个 skill 以前只存在于开发机的 workspace 里（.agents/skills/），
+// git 装进来的插件在别人机器上根本没有 → agent 被要求加载一个不存在的东西。
+// 现在把它内联并通过 ctx.skills.register() 注册为运行时 skill。
+const { buildPromptGuidance, detectSkill, parseSkillFrontmatter, VENDORED_SD25_FILE } = impl.internals;
+check('内联的 SKILL.md 存在', existsSync(VENDORED_SD25_FILE), VENDORED_SD25_FILE);
+const skillText = readFileSync(VENDORED_SD25_FILE, 'utf8');
+const fm = parseSkillFrontmatter(skillText);
+check('frontmatter 能解析出 name/description', fm.name === 'sd25-pe' && fm.description.length > 40, fm);
+check('frontmatter 不会把嵌套块误当标量', fm.metadata === undefined && fm.tags === undefined, Object.keys(fm));
+check('注册成了运行时 skill', skills.length === 1 && skills[0].name === 'sd25-pe', skills.map((x) => x.name));
+check('注册时带上了完整正文（不是只有摘要）', String(skills[0]?.content ?? '').length === skillText.length && skillText.length > 20000, { registered: String(skills[0]?.content ?? '').length, fileChars: skillText.length, fileBytes: Buffer.byteLength(skillText) });
+check('标了 runtime 来源', skills[0]?.source === 'runtime', skills[0]?.source);
+check('带上 resourceBase 供相对资源解析', skills[0]?.resourceBase?.kind === 'directory', skills[0]?.resourceBase);
+check('注册用的描述取自 frontmatter', skills[0]?.description === fm.description);
+
 console.log('\n[注入给 agent 的使用说明]');
 check('注册了 systemPrompt 说明段', promptSections.length === 1, promptSections.map((x) => x.name));
 const guidance = String(promptSections[0]?.text ?? '');
-// 关键：测试环境里没有 skills 服务 → 探不到 sd25-pe → 就**不能**提它。
-// 以前那句是无条件写死的，于是 agent 被要求「先加载一个不存在的东西」，
-// 「不要凭感觉写一句话就提交」这条约束也跟着落空。
-check('探测不到 sd25-pe 时绝不点名它', !/sd25-pe/.test(guidance), guidance.slice(0, 90));
-const { buildPromptGuidance, detectSkill } = impl.internals;
-check('没有 skills 服务时探测返回 false', (await detectSkill(ctx, 'sd25-pe')) === false);
-const withSkill = buildPromptGuidance(true);
-check('确实装了才要求先加载它', /先加载/.test(withSkill) && /sd25-pe/.test(withSkill), withSkill.slice(0, 120));
+// 内联的 skill 注册成功了 → 这次**可以**要求先加载它，因为它是真的存在
+check('内联 skill 可用时要求先加载它', /先加载/.test(guidance) && /sd25-pe/.test(guidance), guidance.slice(0, 140));
+const noSkill = buildPromptGuidance(false);
+check('万一 skill 不可用，说明里就绝不点名它', !/sd25-pe/.test(noSkill), noSkill.slice(0, 90));
 // 不管哪一版，硬要求都必须在——否则「不凭感觉写」的约束就没了
-for (const [label, text] of [['无 skill 版', guidance], ['有 skill 版', withSkill]]) {
+for (const [label, text] of [['无 skill 版', noSkill], ['有 skill 版', buildPromptGuidance(true)]]) {
   check(`${label}：仍要求写清语言`, /英语/.test(text), text.slice(0, 80));
   check(`${label}：仍禁止把画幅/时长写进提示词`, /画幅比例/.test(text) && /总时长/.test(text));
   check(`${label}：仍要求结构化模板`, /结构化/.test(text) && /事件脚本/.test(text));
   check(`${label}：仍保留「不要凭感觉」的约束`, /凭感觉/.test(text));
 }
-check('说明里默认欧美市场 + 英语', /欧美/.test(guidance) && /英语/.test(guidance), 'ok');
-check('说明里禁止把画幅/时长写进提示词', /画幅比例/.test(guidance) && /总时长/.test(guidance), 'ok');
+// 探测：没有任何 skill 服务时要安全返回 false，不能抛
+check('没有 skills 服务时探测返回 false', (await detectSkill({ get: () => undefined }, 'sd25-pe')) === false);
+check('有 skills 服务时探测命中', (await detectSkill(ctx, 'sd25-pe')) === true);
 const diagGuidance = await call('/diag', { method: 'GET' });
-check('/diag 报告 sd25-pe 探测结果', diagGuidance.json?.guidance?.sd25Pe === false, diagGuidance.json?.guidance);
+check('/diag 报告内联 skill 已注册', diagGuidance.json?.guidance?.vendoredSkill === true, diagGuidance.json?.guidance);
+check('/diag 报告 sd25-pe 可用', diagGuidance.json?.guidance?.sd25Pe === true, diagGuidance.json?.guidance);
 
 const { MARKET } = impl.internals;
 check('市场选项含欧美/国内/其它', Object.keys(MARKET).join(',') === 'us-eu,cn,other', Object.keys(MARKET));
