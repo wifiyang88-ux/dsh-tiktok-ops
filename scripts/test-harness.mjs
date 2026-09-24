@@ -5,7 +5,7 @@
  * 用法：node scripts/test-harness.mjs
  */
 import { Readable, Writable } from 'node:stream';
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -234,6 +234,77 @@ const setToken = await call('/settings', { body: { settings: { gubenToken: 'gube
 check('保存顾本 Token', setToken.json.ok === true, setToken.json);
 const maskedToken = await call('/settings', { body: { settings: { gubenToken: '***' } } });
 check('掩码值不覆盖真 Token', maskedToken.json.ok === true, maskedToken.json);
+
+
+console.log('\n[TikTok 登录：入口网址与扫码分支]');
+// 用一个假的 agent-browser 顶替真浏览器，好把登录分支离线跑通。
+// 它会把自己收到的每次调用记到同目录的 calls.log，供断言检查。
+const fakeAbDir = fileURLToPath(new URL('../.harness-home/fake-ab/', import.meta.url));
+mkdirSync(fakeAbDir, { recursive: true });
+const fakeAb = join(fakeAbDir, 'agent-browser');
+const fakeAbLog = join(fakeAbDir, 'calls.log');
+writeFileSync(fakeAbLog, '');
+writeFileSync(
+  fakeAb,
+  [
+    '#!/usr/bin/env node',
+    "import { appendFileSync } from 'node:fs';",
+    "import { dirname, join } from 'node:path';",
+    "import { fileURLToPath } from 'node:url';",
+    'const log = join(dirname(fileURLToPath(import.meta.url)), "calls.log");',
+    'const argv = process.argv.slice(2);',
+    'appendFileSync(log, JSON.stringify(argv) + "\\n");',
+    "const evalIdx = argv.indexOf('eval');",
+    'if (evalIdx >= 0) {',
+    '  const expr = String(argv[evalIdx + 1] ?? "");',
+    '  // 等登录表单：说「就绪」，让有密码的账号走进填表分支',
+    "  if (expr.includes('input[name=\"username\"]')) { console.log('\"ready\"'); process.exit(0); }",
+    '  // 提交后等离开 /login：说「还停在登录页」，于是自动登录失败、掉进人工兜底',
+    "  if (expr.includes('location.href')) { console.log('\"still-login\"'); process.exit(0); }",
+    '  // 按文字点击：报告点到了',
+    "  if (expr.includes('hit.click()')) { console.log('\"clicked\"'); process.exit(0); }",
+    '}',
+    "console.log('');",
+    '',
+  ].join('\n'),
+  { mode: 0o755 }
+);
+chmodSync(fakeAb, 0o755);
+const { canPasswordLogin, TIKTOK_STUDIO_URL } = impl.internals;
+check('登录入口就是 tiktokstudio（发布视频的 Web 端）', TIKTOK_STUDIO_URL === 'https://www.tiktok.com/tiktokstudio', TIKTOK_STUDIO_URL);
+check('不再深链到邮箱密码登录页', !/login\/phone-or-email/.test(TIKTOK_STUDIO_URL));
+check('有密码 → 可以走自动登录', canPasswordLogin({ password: 'pw' }) === true);
+check('没密码 → 只能扫码', canPasswordLogin({}) === false && canPasswordLogin({ password: '' }) === false && canPasswordLogin({ password: '   ' }) === false);
+
+const prevBin = impl.internals.readState().settings.agentBrowserBin;
+mutateForTest((s) => { s.settings.agentBrowserBin = fakeAb; });
+
+// 只用备注名 + 用户名建的账号
+const qrAcc = await call('/account/save', { body: { account: { label: '扫码号', username: 'qr_only' } } });
+const qrId = qrAcc.json.state.accounts.find((a) => a.username === 'qr_only').id;
+check('没填密码也能保存账号', qrAcc.json.ok === true && qrAcc.json.state.accounts.find((a) => a.id === qrId).hasPassword === false, qrAcc.json);
+const qrLogin = await call('/account/login', { body: { id: qrId } });
+check('没密码不再被拒（以前这里直接抛「无法自动登录」）', qrLogin.json.ok === true, qrLogin.json.error);
+check('没密码 → 落到人工扫码', qrLogin.json.result?.status === 'need_manual', qrLogin.json.result);
+check('提示里明确要求扫码', /扫码/.test(String(qrLogin.json.result?.message)), qrLogin.json.result?.message);
+// 关键：没密码的账号不该去碰密码表单
+const qrCalls = readFileSync(fakeAbLog, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l));
+check('扫码分支没有去填密码', !qrCalls.some((c) => c.includes('input[type="password"]')), qrCalls);
+check('扫码分支打开的是 tiktokstudio', qrCalls.some((c) => c.includes('open') && c.join(' ').includes('tiktokstudio')), qrCalls);
+check('扫码分支没走邮箱登录页', !qrCalls.some((c) => c.join(' ').includes('phone-or-email')), qrCalls);
+
+// 有密码的账号：应当先去切「手机号/邮箱/用户名登录」再填表
+writeFileSync(fakeAbLog, '');
+const pwAcc = await call('/account/save', { body: { account: { label: '密码号', username: 'pw_user', password: 'secret' } } });
+const pwId = pwAcc.json.state.accounts.find((a) => a.username === 'pw_user').id;
+const pwLogin = await call('/account/login', { body: { id: pwId } });
+check('有密码 → 自动登录失败后也落到人工兜底', pwLogin.json.ok === true && pwLogin.json.result?.status === 'need_manual', pwLogin.json.result);
+const pwCalls = readFileSync(fakeAbLog, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l));
+check('有密码分支会先切到账号密码登录面板', pwCalls.some((c) => c.join(' ').includes('使用手机号码')), pwCalls.slice(0, 3));
+check('有密码分支确实填了表单', pwCalls.some((c) => c.includes('fill') && c.join(' ').includes('input[name="username"]')), pwCalls);
+check('有密码分支也走 tiktokstudio', pwCalls.some((c) => c.join(' ').includes('tiktokstudio')), pwCalls);
+
+mutateForTest((s) => { s.settings.agentBrowserBin = prevBin; });
 
 console.log('\n[任务：创建]');
 const draft = await call('/task/create', { body: { task: { topic: '珠宝打磨特写', duration: 12, aspect: 'portrait', refs: [{ kind: 'guben', value: '2506' }] } } });
