@@ -569,6 +569,40 @@ calls.length = 0;
 await act(() => restoreBtn.props.onClick());
 check('恢复内联副本会清空覆盖', calls.find((c) => c.path === '/settings')?.body?.settings?.gubenScript === '', calls.find((c) => c.path === '/settings')?.body);
 
+console.log('\n[看板卡片：脚本通过不能引用弹窗里的状态]');
+// 曾经 TaskCard 的 review() 里引用了 providerDraft，而那个变量定义在 TaskDetailModal 里，
+// 不在同一个作用域 —— 卡片上点「通过并生成」会直接抛 ReferenceError。
+// 卡片上根本没有通道下拉，所以它就不该带 provider，服务端沿用任务上已存的那条。
+calls.length = 0;
+let cardErr = null;
+let cardTree = null;
+try {
+  cardTree = await mount(React.createElement(TaskCard, {
+    task: { id: 'task_card', topic: '卡片用例', status: 'script_review', provider: 'thirdparty', duration: 15, aspect: 'portrait', refs: [], genMaterials: [], outputs: [], log: [] },
+    state: baseState(),
+    run: (label, fn) => fn(),
+    busy: false,
+    onOpen: () => {}
+  }));
+} catch (e) { cardErr = e; }
+check('卡片能渲染脚本审核态', cardErr === null && cardTree !== null, String(cardErr?.message));
+const cardApprove = findDeep(cardTree, (n) => n.tag === 'button' && labelOf(n).includes('通过并生成'));
+check('卡片上有「通过并生成」', cardApprove !== null);
+try { await act(() => cardApprove.props.onClick()); cardErr = null; } catch (e) { cardErr = e; }
+check('点它不再抛 ReferenceError', cardErr === null, String(cardErr?.message));
+const cardReview = calls.find((c) => c.path === '/task/review');
+check('卡片按脚本通过提交', cardReview?.body?.stage === 'script' && cardReview?.body?.decision === 'approve', cardReview?.body);
+check('卡片不带 provider（交给服务端沿用已存的那条）', cardReview?.body?.provider === undefined, cardReview?.body);
+
+// 弹窗里的下拉：一改就要落库，而不是只在本地 state 里等「通过」那一下
+calls.length = 0;
+const pvTree = await mount(React.createElement(TaskDetailModal, detail({ status: 'script_review', provider: 'guben' })));
+const pvSelect = find(pvTree, (n) => n.tag === 'select' && findAll(n, (x) => x.tag === 'option').some((o) => labelOf(o).includes('第三方')));
+check('弹窗里有通道下拉', pvSelect !== null);
+await act(() => pvSelect.props.onChange({ target: { value: 'thirdparty' } }));
+const pvCall = calls.find((c) => c.path === '/task/provider');
+check('选通道立刻打到 /task/provider', pvCall?.body?.provider === 'thirdparty', pvCall?.body);
+
 console.log('\n[设置页：第三方视频通道]');
 const tpTree = await mount(React.createElement(SettingsTab, { state: { ...baseState(), settings: { gubenToken: '', thirdPartyBase: 'https://www.whatstoken.ai', thirdPartyToken: '', thirdPartyModel: 'kling-v3-omni', thirdPartyResolution: '720p', thirdPartyGenerateAudio: true } }, run, busy: false }));
 check('设置页出现第三方通道一节', textOf(tpTree).includes('第三方视频通道'), textOf(tpTree).slice(0, 120));

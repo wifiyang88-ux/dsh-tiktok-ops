@@ -779,12 +779,24 @@ check('/diag 报告 MiniMax 已配置', mmDiag.json?.resolved?.minimaxToken === 
 // 收尾：别把测试 Token 留给后面的用例
 impl.internals.writeState({ ...impl.internals.readState(), settings: { ...impl.internals.readState().settings, minimaxToken: '' } });
 
-// 任务上的通道也要能存下来，并且非法值退回顾本
+// 任务上的通道要存得住；而**明确给了但不认识**的值必须报错，不能静默降级。
+// （以前会悄悄变成顾本：表现是「选了通道却没按选择的走」，还看不出异常。）
 const mmTask = await call('/task/create', { body: { task: { topic: '通道用例', duration: 15, aspect: 'portrait', provider: 'minimax' } } });
 check('建任务能带 provider', impl.internals.readState().tasks.find((t) => t.id === mmTask.json?.task?.id)?.provider === 'minimax', mmTask.json?.task?.provider);
+const tpCreate = await call('/task/create', { body: { task: { topic: '通道用例·第三方', provider: 'thirdparty' } } });
+check('建任务能带第三方通道', impl.internals.readState().tasks.find((t) => t.id === tpCreate.json?.task?.id)?.provider === 'thirdparty', tpCreate.json?.task?.provider);
+const noProviderTask = await call('/task/create', { body: { task: { topic: '通道用例·默认' } } });
+check('不传 provider 默认顾本', noProviderTask.json?.task?.provider === 'guben', noProviderTask.json?.task?.provider);
+
+const { resolveProvider } = impl.internals;
+check('空值走默认（不算错）', resolveProvider('') === 'guben' && resolveProvider(undefined) === 'guben' && resolveProvider(null) === 'guben');
+check('认识的值原样返回', resolveProvider('thirdparty') === 'thirdparty' && resolveProvider('minimax') === 'minimax');
+check('不认识的值直接抛错', (() => { try { resolveProvider('sora'); return false; } catch { return true; } })());
+check('报错里列出宿主认识的通道', (() => { try { resolveProvider('sora'); return false; } catch (e) { return /thirdparty/.test(e.message) && /重启/.test(e.message); } })());
 const badProviderTask = await call('/task/create', { body: { task: { topic: '通道用例2', provider: 'sora' } } });
-check('非法 provider 落库时退回顾本', impl.internals.readState().tasks.find((t) => t.id === badProviderTask.json?.task?.id)?.provider === 'guben');
-const noPromptMm = await call('/task/generate', { body: { id: badProviderTask.json?.task?.id, provider: 'minimax' } });
+check('建任务给非法通道 → 明确报错（不再静默降级）', badProviderTask.json?.ok === false && /未知的生视频通道/.test(String(badProviderTask.json?.error)), badProviderTask.json?.error);
+
+const noPromptMm = await call('/task/generate', { body: { id: noProviderTask.json?.task?.id, provider: 'minimax' } });
 check('未获授权的任务不能生成', noPromptMm.json?.ok === false && /进行中·生成视频/.test(String(noPromptMm.json?.error)), noPromptMm.json?.error);
 
 // 端到端：走 impl → lib/minimax.js 整条路（把 fetch 换掉，不联网）
@@ -1279,6 +1291,73 @@ check('原始第三方 Token 不出现在响应里', !JSON.stringify(tpSaved.jso
 check('模型名落库', tpSaved.json.state.settings.thirdPartyModel === 'seedance-2.0');
 check('/diag 报告第三方已配置', (await call('/diag', { method: 'GET' })).json?.resolved?.thirdPartyToken === 'set');
 mutateForTest((s) => { s.settings.thirdPartyToken = ''; });
+
+
+console.log('\n[通道选择：审核通过时按选的走，并保持住]');
+// 用户报的 bug：脚本审核里能选通道，但既不按选的走、也保持不住。
+// 两个成因：① /task/review 没读 body.provider，② normalizeProvider 把不认识的值静默降级成顾本。
+const origFetch2 = globalThis.fetch;
+try {
+  mutateForTest((s) => {
+    s.settings.thirdPartyToken = 'sk-tp';
+    s.settings.thirdPartyModel = 'kling-v3-omni';
+    s.tasks.push({
+      id: 'task_tp_e2e', topic: '第三方端到端', refs: [], genMaterials: [],
+      duration: 15, aspect: 'portrait', market: 'us-eu', provider: 'guben',   // 先故意存成顾本
+      status: 'script_review', op: null, prompt: '一条测试提示词', outputs: [], log: [],
+    });
+  });
+  const tpSeen = [];
+  globalThis.fetch = async (url, init) => {
+    tpSeen.push({ url: String(url), method: init?.method ?? 'GET' });
+    const u = String(url);
+    if (u.endsWith('/v1/video/generations') && init?.method === 'POST') return new Response(JSON.stringify({ id: 'e2e-tp' }), { status: 200 });
+    if (u.includes('/v1/video/generations/e2e-tp')) {
+      return new Response(JSON.stringify({ data: { status: 'succeeded', video_url: 'https://cdn.example.com/e2e.mp4' } }), { status: 200 });
+    }
+    return new Response(Buffer.from('fake-tp-bytes'), { status: 200 });
+  };
+  // 关键一条：审核通过时把通道一起带过去
+  const approve = await call('/task/review', { body: { id: 'task_tp_e2e', stage: 'script', decision: 'approve', provider: 'thirdparty' } });
+  check('审核通过请求成功', approve.json?.ok === true, approve.json?.error);
+  check('确实走了第三方接口（不是顾本）', tpSeen.some((c) => c.url.includes('/v1/video/generations')), tpSeen.map((c) => c.url).slice(0, 3));
+  const afterTp = impl.internals.readState().tasks.find((x) => x.id === 'task_tp_e2e');
+  check('生成后推到视频审核', afterTp.status === 'video_review', afterTp.status);
+  check('产物来源标成 thirdparty', afterTp.outputs?.[0]?.source === 'thirdparty', afterTp.outputs);
+  check('通道选择**保持住**（不再被覆盖回旧值）', afterTp.provider === 'thirdparty', afterTp.provider);
+  check('流转记录里写明通道换了', (afterTp.log ?? []).some((l) => /通道改为/.test(l.text)), (afterTp.log ?? []).map((l) => l.text));
+} finally {
+  globalThis.fetch = origFetch2;
+}
+
+console.log('\n[通道选择：非法值必须吵，不许静默降级]');
+const soraApprove = await call('/task/review', { body: { id: 'task_tp_e2e', stage: 'script', decision: 'reject', provider: 'sora' } });
+check('审核时给非法通道 → 明确报错', soraApprove.json?.ok === false && /未知的生视频通道/.test(String(soraApprove.json?.error)), soraApprove.json?.error);
+
+console.log('\n[通道选择：单独改也要落库]');
+mutateForTest((s) => {
+  s.tasks.push({
+    id: 'task_pv', topic: '改通道用例', refs: [], genMaterials: [], duration: 15, aspect: 'portrait',
+    market: 'us-eu', provider: 'guben', status: 'script_review', op: null, prompt: 'p', outputs: [], log: [],
+  });
+});
+const pvSet = await call('/task/provider', { body: { id: 'task_pv', provider: 'minimax' } });
+check('改通道成功', pvSet.json?.ok === true, pvSet.json?.error);
+check('通道落库', impl.internals.readState().tasks.find((t) => t.id === 'task_pv')?.provider === 'minimax');
+check('落了流转记录', (impl.internals.readState().tasks.find((t) => t.id === 'task_pv')?.log ?? []).some((l) => /通道改为/.test(l.text)));
+// 同一通道重复设置不该刷屏
+await call('/task/provider', { body: { id: 'task_pv', provider: 'minimax' } });
+check('重复设置同一条不重复记流水', (impl.internals.readState().tasks.find((t) => t.id === 'task_pv')?.log ?? []).filter((l) => /通道改为/.test(l.text)).length === 1);
+check('非法通道被拒', (await call('/task/provider', { body: { id: 'task_pv', provider: 'nope' } })).json?.ok === false);
+mutateForTest((s) => { s.tasks.find((t) => t.id === 'task_pv').status = 'working'; s.tasks.find((t) => t.id === 'task_pv').op = { kind: 'video', from: 'script_review', at: null }; });
+check('进行中不能改通道', (await call('/task/provider', { body: { id: 'task_pv', provider: 'guben' } })).json?.ok === false);
+mutateForTest((s) => { const t = s.tasks.find((x) => x.id === 'task_pv'); t.status = 'ready'; t.op = null; });
+check('已出片后不能改通道（那时它是「谁产出的」这条记录）', (await call('/task/provider', { body: { id: 'task_pv', provider: 'guben' } })).json?.ok === false);
+
+console.log('\n[通道选择：/diag 能看出宿主认不认识第三方]');
+const provDiag = await call('/diag', { method: 'GET' });
+check('/diag 列出宿主认识的通道', Array.isArray(provDiag.json?.resolved?.providers) && provDiag.json.resolved.providers.includes('thirdparty'), provDiag.json?.resolved?.providers);
+mutateForTest((s) => { s.settings.thirdPartyToken = ''; s.tasks = s.tasks.filter((t) => !['task_tp_e2e', 'task_pv'].includes(t.id)); });
 
 console.log('\n[重复挂载保护]');
 const routesAfterFirstMount = routes.size;

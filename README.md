@@ -337,6 +337,20 @@ npm run verify
 
 选择会记到任务上（`provider`），下次默认沿用；agent 调 `tiktok_ops_generate` 时也能用 `provider` 参数覆盖。
 
+### 通道什么时候选、存在哪
+
+「生视频通道」在**脚本审核**阶段选（弹窗里那个下拉），也可以在建任务时带：
+
+- **一改就落库**：下拉一变就打 `/task/provider`，所以选完关掉弹窗再打开，值还在。
+- **审核通过时再带一次**：`/task/review`（stage=script）会原子性地把通道一起写进去，
+  紧接着的自动生成就读这个值。两者都不靠「内存里传一下」。
+- **只在草稿 / 脚本审核阶段能改**。出片之后 `provider` 是「这条片子是谁产出的」这条记录，
+  不该再被改（`/task/provider` 会拒绝）。
+- **明确给了但不认识的通道会报错**，不会静默降级。这条是踩出来的：客户端已经是新版、
+  宿主还是旧代码时，`thirdparty` 曾经被悄悄换成顾本 —— 表现就是「选了通道却没按选择的走」，
+  而且哪里都看不出异常。现在会直接告诉你「当前宿主认识的通道：… 请重启 dsh web」。
+  拿不准就先看 `/diag` 的 `resolved.providers`。
+
 ### 第三方（OpenAI 兼容）通道
 
 对接网关在 OpenAI 协议框架下扩展的 `/v1/video/generations`：
@@ -527,7 +541,7 @@ MiniMax H3 生成的是**带音轨**的视频（`t2va` = text→video **+ audio*
 
 ```sh
 npm run verify           # 安装 + 运行时一键验证（14 项）
-npm test                 # 离线：宿主 314 项 + 客户端 107 项
+npm test                 # 离线：宿主 335 项 + 客户端 114 项
 npm run test:host        # 只跑宿主：路由 + 六态流转 + 审核 + 提示词改写 + 素材选择器 + 洞察 + MiniMax 驱动
 npm run test:client      # 只跑客户端：自带最小 React，把 client.js 真渲染一遍并断言发出的请求
 npm run test:parser      # 创作中心列表解析，含分享列（33 项，fixtures 是真实抓取的页面文本）
