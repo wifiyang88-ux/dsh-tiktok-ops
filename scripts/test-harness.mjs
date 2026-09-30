@@ -1154,6 +1154,132 @@ try {
   globalThis.fetch = origGubenFetch;
 }
 
+
+console.log('\n[第三方 OpenAI 兼容通道：字段容错]');
+const tp = await import('../lib/thirdparty.js');
+// 这类网关前面挂着好几家引擎，各家的返回都包了一层且字段名不统一 —— 所以解析是容错的。
+// 文档里只给了「提交」那一半（轮询/响应体缺失），这些候选就是从现实里各种形状反推的。
+const idShapes = [
+  [{ id: 'a1' }, 'a1'],
+  [{ task_id: 'a2' }, 'a2'],
+  [{ request_id: 'a3' }, 'a3'],
+  [{ data: { id: 'a4' } }, 'a4'],
+  [{ data: { task_id: 'a5' } }, 'a5'],
+  [{ output: { task_id: 'a6' } }, 'a6'],
+];
+check('任务 id 的 6 种形状都认得出来', idShapes.every(([b, want]) => tp.pickTaskId(b) === want), idShapes.map(([b]) => tp.pickTaskId(b)));
+check('没有 id 时返回空串（不瞎猜）', tp.pickTaskId({ foo: 1 }) === '');
+
+const statusShapes = [
+  [{ status: 'succeeded' }, 'succeeded'],
+  [{ status: 'SUCCESS' }, 'success'],
+  [{ data: { status: 'completed' } }, 'completed'],
+  [{ state: 'failed' } , 'failed'],
+  [{ output: { task_status: 'processing' } }, 'processing'],
+];
+check('状态的 5 种形状都认得出来', statusShapes.every(([b, want]) => tp.pickStatus(b) === want), statusShapes.map(([b]) => tp.pickStatus(b)));
+check('成功语义归一化成 ok', ['succeeded', 'success', 'completed', 'complete', 'done', 'finished'].every((s) => tp.classifyStatus(s) === 'ok'));
+check('失败语义归一化成 failed', ['failed', 'failure', 'error', 'canceled', 'cancelled'].every((s) => tp.classifyStatus(s) === 'failed'));
+check('还在跑的状态不判成终态', ['queued', 'running', 'processing', 'in_progress', 'pending', ''].every((s) => tp.classifyStatus(s) === ''));
+
+const urlShapes = [
+  [{ url: 'u1' }, 'u1'],
+  [{ video_url: 'u2' }, 'u2'],
+  [{ data: [{ url: 'u3' }] }, 'u3'],
+  [{ data: { video_url: 'u4' } }, 'u4'],
+  [{ output: { url: 'u5' } }, 'u5'],
+  [{ content: { url: 'u6' } }, 'u6'],
+];
+check('视频地址的 6 种形状都认得出来', urlShapes.every(([b, want]) => tp.pickVideoUrl(b) === want), urlShapes.map(([b]) => tp.pickVideoUrl(b)));
+check('字符串型 error 直接取', tp.pickError({ error: '额度不足' }) === '额度不足');
+check('对象型 error 取 message', tp.pickError({ error: { code: 'x', message: '敏感内容' } }) === '敏感内容');
+check('error 埋在 data 里也认得', tp.pickError({ data: { fail_reason: '超时' } }) === '超时');
+
+console.log('\n[第三方通道：请求体组装]');
+const tpBody = tp.buildSubmitBody({ model: 'kling-v3-omni', prompt: '推开大门', duration: 15, ratio: '9:16', resolution: '720p', imageUrls: ['data:image/png;base64,AA'], generateAudio: true });
+check('字段名按文档来', tpBody.model === 'kling-v3-omni' && tpBody.prompt === '推开大门' && tpBody.duration === 15 && tpBody.ratio === '9:16' && tpBody.resolution === '720p', tpBody);
+check('参考图走 image_urls', Array.isArray(tpBody.image_urls) && tpBody.image_urls.length === 1, tpBody.image_urls);
+check('generate_audio 只在打开时才带', tpBody.generate_audio === true && tp.buildSubmitBody({ model: 'm', prompt: 'p' }).generate_audio === undefined);
+check('没参考图就不带 image_urls', tp.buildSubmitBody({ model: 'm', prompt: 'p' }).image_urls === undefined);
+check('模型名必填且报错清楚', (() => { try { tp.buildSubmitBody({ prompt: 'p' }); return false; } catch (e) { return /模型名/.test(e.message); } })());
+check('提示词必填', (() => { try { tp.buildSubmitBody({ model: 'm' }); return false; } catch (e) { return /提示词/.test(e.message); } })());
+check('画幅映射：竖/横/方', tp.ratioOf('portrait') === '9:16' && tp.ratioOf('landscape') === '16:9' && tp.ratioOf('square') === '1:1');
+check('分辨率非法值退回 720p', tp.normalizeThirdPartyResolution('4k') === '720p' && tp.normalizeThirdPartyResolution('1080P') === '1080p');
+
+console.log('\n[第三方通道：提交 → 轮询 → 下载]');
+const tpOut = fileURLToPath(new URL('../.harness-home/tp/', import.meta.url));
+mkdirSync(tpOut, { recursive: true });
+const tpCalls = [];
+let tpPoll = 0;
+const tpFetch = async (url, init) => {
+  tpCalls.push({ url: String(url), method: init?.method ?? 'GET', body: init?.body, auth: init?.headers?.authorization });
+  const u = String(url);
+  if (u.endsWith('/v1/video/generations') && (init?.method ?? 'GET') === 'POST') {
+    return new Response(JSON.stringify({ id: 'tp-1', status: 'queued' }), { status: 200, headers: { 'content-type': 'application/json' } });
+  }
+  if (u.includes('/v1/video/generations/tp-1')) {
+    tpPoll += 1;
+    const payload = tpPoll === 1
+      ? { status: 'processing' }
+      : { data: { status: 'succeeded', video_url: 'https://cdn.example.com/tp.mp4' } };   // 故意用嵌套+别名字段
+    return new Response(JSON.stringify(payload), { status: 200, headers: { 'content-type': 'application/json' } });
+  }
+  return new Response(Buffer.from('fake-mp4'), { status: 200 });
+};
+const tpRes = await tp.generateVideo(
+  { thirdPartyToken: 'sk-t', thirdPartyBase: 'https://gw.example.com' },
+  { model: 'kling-v3-omni', prompt: '推开欧式古典大门', duration: 15, ratio: '9:16', resolution: '720p', outDir: tpOut, fetchImpl: tpFetch, pollIntervalMs: 1 }
+);
+check('嵌套字段也能端到端跑通', tpRes.ok === true && tpRes.files.length === 1 && existsSync(tpRes.files[0]), tpRes);
+const tpPosted = JSON.parse(tpCalls.find((c) => c.method === 'POST').body);
+check('提交体带 model/prompt/duration/ratio/resolution', tpPosted.model === 'kling-v3-omni' && tpPosted.duration === 15 && tpPosted.ratio === '9:16' && tpPosted.resolution === '720p', tpPosted);
+// 调网关的请求都要带 Bearer；产物下载走的是 CDN，**不该**把 API Key 带过去
+const tpApiCalls = tpCalls.filter((c) => !c.url.includes('cdn.example.com'));
+const tpCdnCalls = tpCalls.filter((c) => c.url.includes('cdn.example.com'));
+check('调网关的请求都带 Bearer Key', tpApiCalls.length > 0 && tpApiCalls.every((c) => c.auth === 'Bearer sk-t'), tpApiCalls.map((c) => c.auth));
+check('下载产物时不把 API Key 发给 CDN', tpCdnCalls.length > 0 && tpCdnCalls.every((c) => c.auth === undefined), tpCdnCalls.map((c) => c.auth));
+
+// 轮询路径回退：文档家族那条 404 时，改走 OpenAI 原生 /v1/videos/{id}
+const fbCalls = [];
+const fbFetch = async (url, init) => {
+  fbCalls.push(String(url));
+  const u = String(url);
+  if (u.endsWith('/v1/video/generations') && init?.method === 'POST') return new Response(JSON.stringify({ id: 'fb-1' }), { status: 200 });
+  if (u.includes('/v1/video/generations/fb-1')) return new Response(JSON.stringify({ error: { message: 'not found' } }), { status: 404 });
+  if (u.includes('/v1/videos/fb-1')) return new Response(JSON.stringify({ status: 'completed', url: 'https://cdn.example.com/fb.mp4' }), { status: 200 });
+  return new Response(Buffer.from('x'), { status: 200 });
+};
+const fbRes = await tp.generateVideo({ thirdPartyToken: 'sk-t' }, { model: 'm', prompt: 'p', outDir: tpOut, fetchImpl: fbFetch, pollIntervalMs: 1 });
+check('第一条轮询路径 404 时自动回退到 /v1/videos', fbRes.ok === true, fbRes);
+check('两次路径都试过', fbCalls.some((u) => u.includes('/v1/video/generations/fb-1')) && fbCalls.some((u) => u.includes('/v1/videos/fb-1')), fbCalls);
+
+// 上游失败：files 为空 + 原因带回来（上层守卫靠这个退回脚本审核）
+const tpFailFetch = async (url, init) => {
+  const u = String(url);
+  if (u.endsWith('/v1/video/generations') && init?.method === 'POST') return new Response(JSON.stringify({ id: 'bad-1' }), { status: 200 });
+  return new Response(JSON.stringify({ data: { status: 'failed', fail_reason: '提示词含敏感内容' } }), { status: 200 });
+};
+const tpFailRes = await tp.generateVideo({ thirdPartyToken: 'sk-t' }, { model: 'm', prompt: 'p', outDir: tpOut, fetchImpl: tpFailFetch, pollIntervalMs: 1 });
+check('失败时 files 为空', tpFailRes.ok === false && tpFailRes.files.length === 0, tpFailRes.files);
+check('失败原因带得回来', /敏感内容/.test(generationFailureReason(tpFailRes)), generationFailureReason(tpFailRes));
+
+// 没返回任务 id 时，错误里要带上原始响应，便于人工加候选字段
+const noIdFetch = async () => new Response(JSON.stringify({ weird: 'shape' }), { status: 200 });
+let noIdErr = null;
+try { await tp.generateVideo({ thirdPartyToken: 'sk-t' }, { model: 'm', prompt: 'p', outDir: tpOut, fetchImpl: noIdFetch, pollIntervalMs: 1 }); } catch (e) { noIdErr = e; }
+check('拿不到任务 id 时报错并附原始响应', noIdErr !== null && /任务 id/.test(noIdErr.message) && /weird/.test(noIdErr.message), String(noIdErr?.message).slice(0, 120));
+
+console.log('\n[第三方通道：配置与凭据]');
+check('通道表里有第三方', impl.internals.normalizeProvider('thirdparty') === 'thirdparty');
+check('乱填仍退回顺本', impl.internals.normalizeProvider('whatever') === 'guben');
+const tpSaved = await call('/settings', { body: { settings: { thirdPartyToken: 'sk-secret-tp', thirdPartyModel: 'seedance-2.0', thirdPartyResolution: '1080p' } } });
+check('保存第三方配置成功', tpSaved.json.ok === true, tpSaved.json.error);
+check('第三方 Token 被打码', tpSaved.json.state.settings.thirdPartyToken === '***', tpSaved.json.state.settings.thirdPartyToken);
+check('原始第三方 Token 不出现在响应里', !JSON.stringify(tpSaved.json).includes('sk-secret-tp'));
+check('模型名落库', tpSaved.json.state.settings.thirdPartyModel === 'seedance-2.0');
+check('/diag 报告第三方已配置', (await call('/diag', { method: 'GET' })).json?.resolved?.thirdPartyToken === 'set');
+mutateForTest((s) => { s.settings.thirdPartyToken = ''; });
+
 console.log('\n[重复挂载保护]');
 const routesAfterFirstMount = routes.size;
 let secondError = null;

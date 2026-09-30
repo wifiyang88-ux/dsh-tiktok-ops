@@ -333,10 +333,48 @@ npm run verify
 |---|---|---|---|
 | **顾本素材库**（默认） | 素材 **id** | 顾本积分 | 老路子。素材经 `--refs <id> --scope private/downloaded` 传给模型 |
 | **MiniMax-H3** | 提示词 + 参考素材**字节** | MiniMax 账号按量 | 直连 MiniMax「视频生成 V2」，最高 2K |
+| **第三方（OpenAI 兼容）** | 提示词 + 参考素材**字节** | 该网关计费 | 走网关在 OpenAI 协议下扩展的 `/v1/video/generations`，前面可挂可灵 / 火山 / 即梦 / 万相 |
 
 选择会记到任务上（`provider`），下次默认沿用；agent 调 `tiktok_ops_generate` 时也能用 `provider` 参数覆盖。
 
+### 第三方（OpenAI 兼容）通道
+
+对接网关在 OpenAI 协议框架下扩展的 `/v1/video/generations`：
+
+```
+POST {base}/v1/video/generations        提交任务
+GET  {base}/v1/video/generations/{id}   轮询结果（异步计算模式）
+```
+
+请求体字段名按官方文档：`model` / `prompt` / `image_urls` / `videos` / `audios` /
+`resolution` / `ratio` / `duration` / `generate_audio`。参考素材（任务的「生视频素材」）
+复用 MiniMax 那套解析——本地文件转 data URL、顾本作品先下载再转——只是打包成三个数组。
+
+**解析是刻意容错的。** 这类网关前面通常挂着好几家引擎（可灵 / 火山方舟 / 即梦 / 万相 / Bytefor），
+各家把自己的返回包一层，**字段名并不统一**。所以任务 id、状态、视频地址都按一组候选去找：
+
+| 语义 | 候选字段 |
+|---|---|
+| 任务 id | `id`、`task_id`、`request_id`、`data.id`、`data.task_id`、`output.task_id` |
+| 状态 | `status`、`state`、`task_status`、`data.status`、`output.task_status` |
+| 视频地址 | `url`、`video_url`、`data[0].url`、`data.video_url`、`output.url`、`content.url` |
+| 失败原因 | `error`（字符串或 `{message}`）、`message`、`data.fail_reason` |
+
+状态语义归一化：`succeeded`/`success`/`completed`/`done`… 判成功，
+`failed`/`error`/`canceled`… 判失败，其余视为还在跑。
+
+**轮询路径有回退**：先试 `/v1/video/generations/{id}`，只有 **404** 才改走 OpenAI 原生的
+`/v1/videos/{id}`（其它错误说明路径是对的、是别的问题，直接抛出来更有用）。
+
+找不到任务 id、或任务成功了却没有视频地址时，**错误信息里会带上原始响应**（截断 300 字符），
+方便一眼看出该往候选列表里补哪个字段。
+
+设置项在「设置 → TikTok 运营助手 → 第三方视频通道」：网关地址 / API Key / 模型名 /
+分辨率（480p / 720p / 1080p，网关会按厂商传译，例如可灵 1080p→pro、720p→std）/
+生成音频开关（文档默认 false，本插件默认打开，因为提示词一直在写背景乐与音效）。
+
 ### MiniMax-H3 对接细节
+
 
 对接的是 [视频生成 V2](https://platform.minimax.cn/docs/api-reference/video-generation-v2-create)：
 
@@ -489,7 +527,7 @@ MiniMax H3 生成的是**带音轨**的视频（`t2va` = text→video **+ audio*
 
 ```sh
 npm run verify           # 安装 + 运行时一键验证（14 项）
-npm test                 # 离线：宿主 280 项 + 客户端 98 项
+npm test                 # 离线：宿主 314 项 + 客户端 107 项
 npm run test:host        # 只跑宿主：路由 + 六态流转 + 审核 + 提示词改写 + 素材选择器 + 洞察 + MiniMax 驱动
 npm run test:client      # 只跑客户端：自带最小 React，把 client.js 真渲染一遍并断言发出的请求
 npm run test:parser      # 创作中心列表解析，含分享列（33 项，fixtures 是真实抓取的页面文本）
@@ -522,6 +560,8 @@ patch 内容没变时 `entry.update` 是空操作。稳妥做法还是在启动 
 lib/index.js         宿主薄壳（热加载用）
 lib/impl.js          宿主实现：任务模型/流转/路由/工具/驱动/洞察
 lib/minimax.js       MiniMax H3 视频生成驱动（建任务/轮询/下载，可注入 fetch 测试）
+lib/thirdparty.js    第三方 OpenAI 兼容视频通道（字段容错解析 + 轮询路径回退）
+lib/provider-util.js 两个 HTTP 通道共用的请求/重试/下载
 vendor/guben.mjs     内联的顾本 CLI（零依赖，用户不用另装 guben-material）
 vendor/sd25-pe/      内联的火山方舟官方提示词优化 skill（注册成运行时 skill）
 lib/client.js        客户端落地页（含素材选择器）

@@ -521,7 +521,7 @@ console.log('\n[设置页：MiniMax Token 与档位]');
 const settingsTree = await mount(React.createElement(SettingsTab, { state: { ...baseState(), settings: { gubenToken: '', minimaxToken: '', minimaxModel: 'MiniMax-H3', minimaxResolution: '768P' } }, run, busy: false }));
 check('设置页出现 MiniMax H3 一节', textOf(settingsTree).includes('MiniMax H3（视频生成）'));
 const pwInputs = findAll(settingsTree, (n) => n.tag === 'input' && n.props?.type === 'password');
-check('有 MiniMax Token 输入框（密码型）', pwInputs.length === 3, pwInputs.length); // 账号密码 + 顾本 Token + MiniMax Token
+check('有 MiniMax Token 输入框（密码型）', pwInputs.length === 4, pwInputs.length); // 账号密码 + 顾本 + MiniMax + 第三方
 const modelSelect = find(settingsTree, (n) => n.tag === 'select' && n.props?.value === 'MiniMax-H3');
 check('模型下拉默认 H3', Boolean(modelSelect));
 const resSelect = find(settingsTree, (n) => n.tag === 'select' && n.props?.value === '768P');
@@ -568,6 +568,25 @@ check('配了覆盖后「恢复内联副本」可点', restoreBtn?.props?.disabl
 calls.length = 0;
 await act(() => restoreBtn.props.onClick());
 check('恢复内联副本会清空覆盖', calls.find((c) => c.path === '/settings')?.body?.settings?.gubenScript === '', calls.find((c) => c.path === '/settings')?.body);
+
+console.log('\n[设置页：第三方视频通道]');
+const tpTree = await mount(React.createElement(SettingsTab, { state: { ...baseState(), settings: { gubenToken: '', thirdPartyBase: 'https://www.whatstoken.ai', thirdPartyToken: '', thirdPartyModel: 'kling-v3-omni', thirdPartyResolution: '720p', thirdPartyGenerateAudio: true } }, run, busy: false }));
+check('设置页出现第三方通道一节', textOf(tpTree).includes('第三方视频通道'), textOf(tpTree).slice(0, 120));
+check('带出网关地址', Boolean(findInput(tpTree, (n) => String(n.props?.defaultValue ?? '') === 'https://www.whatstoken.ai')));
+check('带出模型名', Boolean(findInput(tpTree, (n) => String(n.props?.defaultValue ?? '') === 'kling-v3-omni')));
+check('分辨率档位是 480p/720p/1080p', ['480p','720p','1080p'].every((r) => findAll(tpTree, (n) => n.tag === 'option').map(labelOf).includes(r)), findAll(tpTree, (n) => n.tag === 'option').map(labelOf));
+check('有生成音频开关', textOf(tpTree).includes('生成音频'));
+// 保存 Key 不能把打码值写回去
+calls.length = 0;
+const tpKey = findInput(tpTree, (n) => n.props?.type === 'password' && /sk-/.test(String(n.props?.placeholder ?? '')));
+check('能定位到第三方 Key 输入框', tpKey !== null, tpKey?.props?.placeholder);
+const tpTyped = await act(() => tpKey.props.onChange({ target: { value: 'sk-tp-abc' } }));
+await act(() => findDeep(tpTyped, (n) => n.tag === 'button' && labelOf(n).includes('保存 Key')).props.onClick());
+check('保存第三方 Key 打到 /settings', calls.find((c) => c.path === '/settings')?.body?.settings?.thirdPartyToken === 'sk-tp-abc', calls.find((c) => c.path === '/settings')?.body);
+// 通道下拉里要有第三个选项
+const tpTaskTree = await mount(React.createElement(TaskDetailModal, detail({ status: 'script_review', provider: 'thirdparty' })));
+check('通道下拉含第三方选项', findAll(tpTaskTree, (n) => n.tag === 'option').some((o) => labelOf(o).includes('第三方')), findAll(tpTaskTree, (n) => n.tag === 'option').map(labelOf));
+check('任务存 thirdparty 时下拉跟着走', Boolean(find(tpTaskTree, (n) => n.tag === 'select' && n.props?.value === 'thirdparty')));
 
 console.log('\n[设置页：平台域名与连接自检]');
 // mount 会重置 hook store，所以这里重新挂一个干净的实例再交互
